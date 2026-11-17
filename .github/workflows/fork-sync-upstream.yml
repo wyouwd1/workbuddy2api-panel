@@ -1,0 +1,84 @@
+name: 同步上游
+
+# 把 misakano7545/workbuddy2api-panel 的 main 对齐到本 fork 的 main。
+# 本 fork 视为只读镜像：除本文件外不要在此分支提交任何改动，同步时会被覆盖。
+
+on:
+  schedule:
+    # 每 6 小时（UTC 17 分）：北京时间 02:17 / 08:17 / 14:17 / 20:17
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: '忽略「已是最新」判断，强制对齐上游（仅用于验证）'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出 fork 的 main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: 配置 git 身份
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: 拉取上游 main
+        run: |
+          git remote add upstream https://github.com/misakano7545/workbuddy2api-panel.git 2>/dev/null || \
+            git remote set-url upstream https://github.com/misakano7545/workbuddy2api-panel.git
+          git fetch --no-tags upstream main
+          echo "UPSTREAM_SHA=$(git rev-parse upstream/main)" >> "$GITHUB_ENV"
+          echo "上游 main = $(git rev-parse --short upstream/main)"
+
+      - name: 判断是否需要同步
+        id: check
+        run: |
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+            echo "force=true，强制对齐上游"
+            echo "need=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # fork 正常情况下 = 上游最新提交 + 1 个「保留 workflow」提交
+          if git merge-base --is-ancestor "$UPSTREAM_SHA" HEAD; then
+            extra=$(git rev-list --count HEAD "^$UPSTREAM_SHA")
+            if [ "$extra" -le 1 ]; then
+              echo "need=false" >> "$GITHUB_OUTPUT"
+              echo "已是最新：fork 领先上游 $extra 个提交（同步 workflow 自身）"
+              exit 0
+            fi
+            echo "fork 领先上游 $extra 个提交，超出预期，将强制对齐"
+          else
+            echo "上游有新提交（或发生强推）"
+          fi
+          echo "need=true" >> "$GITHUB_OUTPUT"
+
+      - name: 对齐上游并保留同步 workflow
+        if: steps.check.outputs.need == 'true'
+        run: |
+          WF=".github/workflows/fork-sync-upstream.yml"
+          mkdir -p /tmp/keep
+          cp "$WF" /tmp/keep/fork-sync-upstream.yml
+
+          git reset --hard "$UPSTREAM_SHA"
+
+          mkdir -p .github/workflows
+          cp /tmp/keep/fork-sync-upstream.yml "$WF"
+          git add "$WF"
+          git commit -m "ci: 保留上游同步 workflow（对齐上游 $(git rev-parse --short "$UPSTREAM_SHA")）"
+
+          git push origin HEAD:main --force
+          echo "已推送：$(git rev-parse --short HEAD)"
