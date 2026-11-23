@@ -60,6 +60,15 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 
 > ⚠️ 合规须知：本项目是**非官方**网关，使用 CodeBuddy 账号作为上游，**仅限本人授权账号、本机 / 私有环境测试**。详细边界见[安全与合规](#安全与合规)。
 
+## 合作伙伴
+
+<a href="https://www.ipwo.net/?ref=githubworkbuddy2apipanel"><img width="5120" height="601" alt="30f235b8d74c22bdf31db956230949a6" src="https://github.com/user-attachments/assets/e74e1c0a-d60f-46df-ae2f-84cbfb796db2" /></a>
+
+IPWO 住宅代理：为全球 API 连接提供灵活的网络支持。
+覆盖 195+ 个国家和地区的 9000 万+ 住宅 IP 资源，支持 HTTP(S)、SOCKS5 协议，以及国家和城市级定位。适用于 API 接入、跨境开发、网络连接测试及数据采集等场景。动态支持免费测试，静态IP低至9.9元/月/条。90折扣码：`0200`
+
+注册地址：https://www.ipwo.net/?ref=githubworkbuddy2apipanel
+
 ## 核心能力
 
 | 能力 | 说明 |
@@ -134,7 +143,7 @@ curl -s http://127.0.0.1:7863/v1/videos/1312831544-WandVideo-… \
   -H "Authorization: Bearer $WB2API_KEY"
 ```
 
-请求参数：`prompt`（必填）、`model`、`seconds`（实测 4-15）、`resolution`、`aspect_ratio`（`16:9` / `9:16` / `1:1`）、`negative_prompt`、`enable_audio`（默认 `true`）、`watermark`（默认 `true`）、`image`（图生视频，公网/签名 URL）、`last_image`（尾帧）、`wait`（缺省 `true`）、`timeout_seconds`（缺省 900，封顶 1800）。除 `wait` / `timeout_seconds` 外都原样交给上游。
+请求参数：`prompt`（必填）、`model`、`seconds`（实测 4-15）、`resolution`、`aspect_ratio`（`16:9` / `9:16` / `1:1`）、`negative_prompt`、`enable_audio`（默认 `true`）、`watermark`（默认 `true`）、`image`（图生视频，公网/签名 URL）、`last_image`（尾帧）、`reference_images` / `reference_videos` / `reference_audios`（参考素材，`["url", …]` 或上游原形 `[{"image_url": …}]` 都收，网关补成上游的对象数组）、`wait`（缺省 `true`）、`timeout_seconds`（缺省 900，封顶 1800）。除 `wait` / `timeout_seconds` 与三个 `reference_*` 的形状转换外，都原样交给上游。
 
 回执（出片后）：
 
@@ -313,7 +322,9 @@ socks5h://127.0.0.1:1081
 
 分区默认出口（面板「代理池 → 分区默认出口」）按 realm 指定：`cn` 与 `global` 各一条，账号行没单独指定代理时取它。查表顺序是**账号绑定 > realm 默认 > 随机池 > 直连**——账号行里点过「直连」的号不会被 realm 默认覆盖。
 
-池为空时默认随机使用直连。池中已有节点但没有可用节点时返回错误。代理故障不处罚账号，不触发额外换号重试。聊天、图片、搜索、嵌入、token 刷新、余额和账号后台任务使用同一账号路由入口。未关联账号的 OAuth 授权与更新下载沿用原出站行为。
+池为空时默认随机使用直连。池中已有节点但没有可用节点时返回错误。代理故障不处罚账号，不触发额外换号重试。聊天、图片、搜索、嵌入、token 刷新、余额和账号后台任务使用同一账号路由入口。加号（OAuth 登录）另有一条专用规则，见下；更新下载沿用原出站行为。
+
+**加号出口（`features.login_bind_proxy`，缺省 `true`，热生效）**：登录那一刻账号还不存在，上面那张查表三级在它身上全部落空，旧行为必然是直连机房 IP。打开这个开关后，`POST /panel/api/login/start` 先从号池里随机挑一条**启用**节点（优先「启用且健康」），`auth/state`、`auth/token`、`login/account` 三个端点全部经这条出口发出；账号落盘后立刻写成该号的**固定绑定**，随后的注册激活、签到、余额刷新与所有任务/聊天都走同一条出口——「哪条 IP 注册的号就一直用哪条」。一条启用节点都没有（或开关关掉）时回落直连并在日志里留一行，不让没配代理的部署因此加不了号；有启用节点但一条都不健康时**仍从启用节点里挑**，宁可让这次登录报代理错误、用户重试，也不静默换成机房 IP。登录响应的 `proxy` 字段回显本次出口（`直连` 或 `代理 <节点名>`），完成时的 `login/poll` 也会回显绑定结果。
 
 HTTP/HTTPS 使用标准代理传输；`socks5` 在本机解析目标域名，`socks5h` 由代理解析。各节点复用独立连接池，沿用现有 DNS、TLS、响应头超时和流式空闲控制。禁用或删除只关闭空闲连接，在途请求继续完成。
 
@@ -412,6 +423,7 @@ HTTP/HTTPS 使用标准代理传输；`socks5` 在本机解析目标域名，`so
 
 - **全账号任务扫描**：一键拉取每个账号未完成且可自动化的成长任务（含小程序口径），列表一目了然
 - **执行队列**：把待办按账号排队执行——账号内串行（与单任务/一键完成共用互斥锁），账号间可选并发（1-3）；执行进度实时更新到每个条目。**同一队列也可按排程每日自动跑**（`schedule.growth_hours`，默认 11 点；排程轮次账号间固定串行）
+- **实时任务卡**（`GET /panel/api/tasks/live`）：进入页面即拉，按所选间隔（关 / 1 / 2 / 5 分钟，默认 2 分钟，选择记在浏览器本地）自动刷新，不需要先点扫描；只有还有待办 / 可领 / 查询失败的账号才列任务，全部领完的只计入汇总。一轮对每个启用账号发一次任务表 GET（国内版小程序口径、国际版默认口径，失败不重试），后端缓存 60 秒（多标签页共用，`fresh=1` 在 15 秒内仍回缓存），同一时刻只跑一轮且在后台进行——请求最多等 25 秒，之后带着上一份快照返回（`refreshing: true`）。页面不在前台（切走视图 / 标签页在后台）不轮询，账号任务弹窗的 30 秒静默刷新同样遵守
 - **日志分频道**：运行日志按「任务 / 对话 / 系统」三个频道筛选——对话流量再大，任务结果也不会被冲掉；日志条目带频道徽标与时间
 
 任务中心扫描会合并小程序口径待办（`Sequential_Tasks_*`，默认列表不可见）。accept 带登记回读：上游有过 200 但没落账的情况，未生效会再试一次。
@@ -505,7 +517,9 @@ DMG 未公证，首次打开需要右键 →「打开」。
 | **在线配置编辑（热生效）** | 面板直接改 `config.json`：API 密钥 / `soft_rate` / 脱敏开关 / 池参数 / 任务排程**立即生效**；装配期字段（listen 等）保存后提示需重启。写入采用深合并 + 原子替换，保留未知键 |
 | **积分任务体系** | 任务列表 / 接受 / 领取接口 + 面板弹窗；「一键完成」覆盖 **25 个任务**（对话 / 领养 / 桌面行为链 / 模板 / 灵感案例 / 专家召唤 / 技能尝鲜 / 主题 / 资料库等），推进进度、等待异步计分落定后**自动领奖**，纯 API 零客户端依赖 |
 | **模型繁忙度（面板）** | 「模型与档位」列出官方 `/v2/chat/busy` 的实时繁忙度（idle/normal/busy/congested/unavailable），只在 `繁忙 / 拥堵 / 不可用` 时挂色标——它解释了 chat 侧偶发的 429 / 6021 queue.full。**只读观测**：不参与选号；服务端偶发对整批回 `unknown`（实测同批重查可在 idle/unknown 间跳），故取不到就不标；同页每行另有**网关档位**下拉（首项＝模型支持的最高档，其余为具体档与 `off`；写入 `thinking.model_defaults` 精确键、保存即热生效，策略关闭时整体禁用并显示生效档）与**下游可见**开关（与 `models.hidden` 同一份黑名单：关掉的模型从 `/v1/models` 隐藏、点名调用被拒，行尾置灰并排到列表末尾） |
-| **联网检索（官方 agenttool）** | `POST /v1/search` 透传官方 `{base}/agenttool/v1/search`（`{query,max_results}` → `{results[].title/url/snippet/date,total_results}`，查询免费；对 DSH（DeepSeek Harness，按 UA 含 `deepseek-harness` 识别）额外启用 DeepSeek Search API 兼容：接受 `count` 作为条数，`date` 缺失时补 `null`、`title`/`snippet` 缺失时补空串；其余客户端保持上游原文逐字节透传）；同一 base 还提供 `POST /v1/fetch`（`{"url":"https://…"}` → `{"content":"<markdown>"}`，透传官方 `agenttool/v1/webfetch`）；加 `"deep":true` 则改走官方**综述式**检索 `agentic_search`（服务端多轮检索 + 抓页 + 带引用综述，回 `done` 帧原文：`synthesis.content` + `results` 整页正文 + `statuses` + `partial` 降级标记）——实测单次 18~66s、prompt ~48K tokens，故默认走 snippet 快路径（~1s）。另在 `/v1/messages` 与 `/v1/responses` 上落地服务端联网工具：客户端（Claude Code / Codex）只声明 `{"type":"web_search_20250305","name":"web_search"}`（或 Responses 的托管 `{"type":"web_search"}`），网关侧先让模型自己写检索词（探测）、执行检索、把结果注入上下文，再走既有流式管道出答案。Anthropic 侧按协议回报 `server_tool_use` + `web_search_tool_result` 块（含来源 URL，且**不**降级成客户端可执行的 `tool_use`）；没声明该工具的请求零额外开销；检索失败如实告知模型（不静默当成「网上没有」），联网不可用则降级为普通对话 |
+| **联网检索（官方 agenttool）** | `POST /v1/search` 透传官方 `{base}/agenttool/v1/search`（`{query,max_results}` → `{results[].title/url/snippet/date,total_results}`，查询免费；对 DSH（DeepSeek Harness，按 UA 含 `deepseek-harness` 识别）额外启用 DeepSeek Search API 兼容：接受 `count` 作为条数，`date` 缺失时补 `null`、`title`/`snippet` 缺失时补空串；其余客户端保持上游原文逐字节透传）；同一 base 还提供 `POST /v1/fetch`（`{"url":"https://…"}` → `{"content":"<markdown>"}`，透传官方 `agenttool/v1/webfetch`）。另提供 DeepSeek **官方形状的别名** `POST /v1/tools/search`、`POST /v1/tools/fetch`（官方文档的端点是 `{base}/v1/tools/search` 与 `/v1/tools/fetch`；**别名一律走 DeepSeek 兼容形状、不看 UA**，因为路径本身就是「我要官方 schema」的声明——`dsh-free-search` 这类客户端会把填的 `.../v1` 强制改写成 `.../v1/tools/search`，靠配置绕不开）。DeepSeek 官方的 `need_content` / `ori_question` / `localization` 三个字段**当前被忽略**：上游 snippet 接口没有正文开关，`need_content:true` 不报错但响应里不会有整页正文（`content` 缺省为空）；需要正文请用 `"deep":true` 走综述式检索；加 `"deep":true` 则改走官方**综述式**检索 `agentic_search`（服务端多轮检索 + 抓页 + 带引用综述，回 `done` 帧原文：`synthesis.content` + `results` 整页正文 + `statuses` + `partial` 降级标记）——实测单次 18~66s、prompt ~48K tokens，故默认走 snippet 快路径（~1s）。另在 `/v1/messages` 与 `/v1/responses` 上落地服务端联网工具：客户端（Claude Code / Codex）只声明 `{"type":"web_search_20250305","name":"web_search"}`（或 Responses 的托管 `{"type":"web_search"}`），网关侧先让模型自己写检索词（探测）、执行检索、把结果注入上下文，再走既有流式管道出答案。Anthropic 侧按协议回报 `server_tool_use` + `web_search_tool_result` 块（含来源 URL，且**不**降级成客户端可执行的 `tool_use`）；没声明该工具的请求零额外开销；检索失败如实告知模型（不静默当成「网上没有」），联网不可用则降级为普通对话 |
+| **嵌入（OpenAI 兼容）** | `POST /v1/embeddings`（`{model:"bge-m3", input}` → `data[].embedding`）。上游嵌入与对话是两套注册表，`bge-m3` 不在 `/v1/models` 目录里——搜不到不代表没有。开关 `features.embeddings_enabled`，**默认关闭**（关着回 403 `embeddings_disabled`，不是 404）；未知模型上游回 11351，本端映射成 404 `model_not_found` |
+| **语音合成 / 语音识别（官方 audio 端点）** | `POST /v1/audio/speech`（OpenAI 形状：`{input, voice?, response_format?}` → `audio/wav`，24kHz 单声道）与 `POST /v1/audio/transcriptions`（multipart，字段 `file` 或 `audio` → `{text}`）。上游是官方独立端点（`{chatBase}/v2/audio/speech` 的 SSE+PCM、`{chatBase}/agenttool/v1/asr` 的 multipart），**不在 `/v1/models` 目录里**。开关 `features.tts_enabled` / `features.asr_enabled`，**默认关闭**（关着回 403 而不是 404）；协议来自官方桌面端包内 `main/server.js` 的静态反查，已于 2026-11-20 用真号跑通 TTS→ASR 闭环（未抓包对照）。只出 `wav` / `pcm`：上游只产 PCM，声称 mp3 等于撒谎；`voice` **只有 `f191_female_cn_tts2.5_flash` 一个可用**（省略即用它），传 OpenAI 音色名（`alloy` 等）上游回 500 + code 10000 `get voice config failed`，网关按请求级错误直接透传并提示省掉 `voice`；`/v1/audio/transcriptions` 的音频上限 **3MB**（上游硬限，超过回 413 `audio_too_large`），音频必须是 WAV/WebM 等带容器头的格式——裸 PCM 上游回 502 + code 15053 `ASR recognition failed`，网关按请求级透传并提示换容器；`response_format` 认 `json`（默认）/ `text`，`srt` / `vtt` / `verbose_json` 上游没有时间戳故回 400 |
 | **托管出图（Responses `image_generation`）** | 客户端（Codex / ChatGPT 那套用法）只声明 `{"type":"image_generation"}`，网关侧先让模型**自己写提示词**（探测），再走本网关的出图管道（选号 / 白名单 / 记账与 `/v1/images/generations` 同口径），成品以 `image_generation_call` 输出项交付：`result` 是 base64，非流式插在 `output` 首位、流式在 `response.created` 之后补 `output_item.added/done`。单请求只出一张（与 `n>1` 拒绝同口径）；出图失败照样回到文本回答，但注入的是「出图接口不可用」，模型不能假装已生成。没声明该工具的请求零额外开销 |
 | **成长任务队列每日排程** | `schedule.growth_hours`（默认 `[11]`）+ `schedule.growth_enabled`：面板任务中心的执行队列按排程每日自动跑一遍（扫描待办 → accept → 动作 → 达标领奖），与手动入口共用同一队列与账号锁；`POST /admin/tasks/growth/run` 可手动补跑 |
 | **国际版每日活跃（网页通道）** | 国际版每日 30/50 积分只认「**跑完的网页 agent 会话**」——桌面身分 chat/completions 与 `/v2/report` 只点亮连登，积分不动（issue #111 实测）。排程的国际版活跃腿因此完整复刻网页端链路：`POST /console/as/conversations/` 建会话 → `GET .../{id}/session` 取沙箱 `link`/`token` → ACP over SSE（`initialize` → `session/load` → `session/set_model` → `session/prompt`）→ 轮询 `data.status` 到 `completed` → `stop`（失败再 `delete`）。三个必须照抄客户端的细节：ACP 鉴权用**沙箱 token**（账号 token 一律 401 `12801`）、走浏览器身份 UA/Origin、跑完必须收尾（单号活跃会话上限 10 条，漏收尾攒满就再也建不出会话）。模型钉 `deepseek-v4.1-flash`（国际版 x0.00，打卡不扣积分）；当日成功一次后不再重复建会话。国内版零调用 |
@@ -533,6 +547,7 @@ DMG 未公证，首次打开需要右键 →「打开」。
 | **水印裁切（可选）** | `POST /v1/images/strip-watermark` + MCP 工具 `strip_watermark`：把成品图底部的整条纯白留白裁掉，右下角「AI生成」水印随之消失（实测水印 111×51px、贴边 10px；白底上像素级不可见）。默认关闭（`features.watermark_strip_enabled`），纯 stdlib 实现（`internal/media`，逐行标准差找内容/留白分界），只做裁剪不做 inpainting，留白不足回 422 并给实测数字；图片地址限上游产物域，避免 SSRF |
 | **MCP 端点** | `POST /mcp`：JSON-RPC 2.0 纯 POST 形态（无 SSE、无 session），`initialize` / `ping` / `tools/list` / `tools/call` 齐全，工具 `list_generation_models`、`generate_image`、`edit_image`、`generate_video`、`get_video_task`（另有条件出现的 `generate_3d` / `get_3d_task` / `strip_watermark`，随各自开关）。工具调用复用网关自己的 HTTP handler，换号/错误策略/记账/请求日志与 REST 同一路径 |
 | **6020/6021 排队请求内等待** | 上游 6020 给出 `retry_after` 时，先在原账号按该口径等待一轮再试（上限 `features.busy_wait_seconds`，默认 60 秒，最大 600；负数关闭等待）。等待不算换号、不罚账号，客户端取消立即停。仍排队回 429 + `Retry-After`；首帧保活已提交时以 `rate_limit_error` SSE 帧返回并带 `retry_after`。设 `features.busy_retry=false` 可恢复立即交回客户端的旧行为 |
+| **预告式收尾救援（可关）** | 模型把话停在半句上（「……：」或「我将…」）却回 `finish_reason=stop` 时，网关补发一次续写，把剩余内容接上去（issue #245 的长会话断写）。代价是每救一次就多打一次上游、重付一遍整段 prompt；更麻烦的是这条救援往对话里追加的是 **role=user** 的指令，agent 类客户端分辨不出它与真实用户输入的区别（issue #273 第二条评论：被当成用户批准、无人值守执行了 9 分钟工具调用，客户端历史里还查不到）。指令文本以 `【wb2api 网关自动续写·非用户消息】` 开头自报身份，面板概况卡片显示**今日救援次数**；设 `features.narration_enabled=false` 可整条关掉（热生效，关后行为回到「模型说停就停」）。调试「为什么没救」用 `WB2API_RESCUE_TRACE=1`（只记枚举码，见 `references/rescue-gate-matrix.md`） |
 | **嵌入端点（实验）** | `POST /v1/embeddings`：OpenAI 兼容嵌入，默认关闭（`features.embeddings_enabled`）。上游 `POST /v2/embeddings` 与对话是两套注册表，实测只有 `bge-m3`（1024 维）；`11351` 映射成 404 `model_not_found`，回程补 `object`/`index`，条数不符 502。关闭时回 403 `embeddings_disabled` |
 | **补签卡每轮上限** | `schedule.makeup_cards_per_round`（默认 `0` = 不限，保持既有行为）。补签会改账号历史，保守部署设 `1` 即每轮只补一张，剩余漏签下一轮继续；面板保存后热生效 |
 
