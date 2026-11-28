@@ -420,6 +420,8 @@ func main() {
 		AllowedModels:    allowedModels,
 		AllowlistEnabled: allowlistEnabled,
 		ModelAliases:     livecfg.NormalizeModelAliases(cfg.Models.Aliases),
+		// 入站 IP 黑名单（security.ip_blacklist，issue #244）：命中即在入口 403。
+		IPBlacklist: livecfg.NormalizeIPBlacklist(cfg.Security.IPBlacklist),
 		// 模型降级路由表（pool.model_fallback）：6004 限流时同账号改用等价模型。
 		ModelFallback: cfg.Pool.ModelFallback,
 		// 思考档位策略镜像：面板「模型与档位」页的「网关档位」列据此显示当前生效值。
@@ -436,6 +438,11 @@ func main() {
 	rec.Start()
 	defer rec.Stop()
 	log.Printf("[usage] 逐请求用量记录已启用: %s (%s)", usagePath, rec.Describe())
+
+	// 模型限流映射 tracker：面板与网关共用**同一个实例**——面板改完策略，网关下一次判定
+	// 就按新策略走；两边各建一个会出现「面板说已超额、请求照样放行」。
+	// 策略文件与 state.json 同目录（<数据目录>/model_limits.json），随数据目录搬移。
+	modelLimits := newModelLimitsTracker(p, up, rec, live, cfg.StateFile)
 
 	// 请求指标始终启用；JSONL 归档只写脱敏元数据，写盘失败不影响聊天请求。
 	requestLog := reqlog.New(reqlog.Config{
@@ -476,6 +483,8 @@ func main() {
 		Scheduler:  sch,
 		// 降级路由表：面板据此在限流提示里标注「已路由至 <等价模型>」。
 		ModelFallback: func() map[string]string { return live.Load().ModelFallback },
+		// 模型限流映射 tracker（与网关共用同一个实例）。
+		ModelLimits: modelLimits,
 		// 余额趋势采样记录器：nil 时该视图返回 501。
 		Balance: bal,
 		// 后台任务的自动触发开关与成长任务排程共用热配置（schedule.growth_enabled）。
@@ -573,7 +582,9 @@ func main() {
 		PromptMode:   cfg.Prompt.Mode,
 		// 模型降级路由表：读 live 快照（支持面板热更，改完即生效、无需重启）。
 		ModelFallback: func() map[string]string { return live.Load().ModelFallback },
-		PromptText:    cfg.PromptText,
+		// 模型限流映射 tracker：本地强制（选号前判定）与降级链都走它（nil = 未启用）。
+		ModelLimits: modelLimits,
+		PromptText:  cfg.PromptText,
 		// 来源记录开关经 livecfg 热生效；此处同时填静态字段，供 Live 为 nil 的
 		// 裸用/测试路径拿到同一缺省值。
 		RecordClientInfo: cfg.Logging.RequestClientInfo,
@@ -586,7 +597,9 @@ func main() {
 		// 模型白名单原始条目（issue #68）；同上，运行期以 livecfg 快照为准。
 		ModelsAllowed: cfg.Models.Allowed,
 		// 模型映射原始条目（issue #30）；同上，运行期以 livecfg 快照为准。
-		ModelsAliases:  cfg.Models.Aliases,
+		ModelsAliases: cfg.Models.Aliases,
+		// 入站 IP 黑名单原始条目（security.ip_blacklist，issue #244）；同上。
+		IPBlacklist:    cfg.Security.IPBlacklist,
 		AdminEnabled:   cfg.Admin.Enabled,
 		MetricsEnabled: cfg.Metrics.Enabled,
 		// 3D 开关的静态回退（运行期以 livecfg 快照为准，热生效）。
@@ -608,6 +621,9 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// 模型限流映射 tracker 的后台刷新（重算额度快照、落盘策略）挂在服务生命周期上：
+	// ctx 一取消就停，不留孤儿 goroutine。
+	modelLimits.Start(ctx)
 	proxyCtx, stopProxies := context.WithCancel(ctx)
 	proxyDone := make(chan struct{})
 	go func() {
@@ -988,6 +1004,8 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 		AllowedModels:    newAllowedModels,
 		AllowlistEnabled: newAllowlistEnabled,
 		ModelAliases:     livecfg.NormalizeModelAliases(newCfg.Models.Aliases),
+		// 入站 IP 黑名单（issue #244）：面板保存即热生效。
+		IPBlacklist: livecfg.NormalizeIPBlacklist(newCfg.Security.IPBlacklist),
 		// 思考档位策略镜像：与 up.SetEffortPolicy 同批热更新，面板立即回显新生效值。
 		ThinkingEnabled:        newCfg.Thinking.Enabled,
 		ThinkingDefaultEffort:  newCfg.Thinking.DefaultEffort,
